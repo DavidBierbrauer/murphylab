@@ -1,17 +1,15 @@
 """#!/usr/bin/env python"""
-import sys
-import atexit
-import platform
-import time
 import pandas as pd
 import math
 import numpy as np
-from pandas import DataFrame, read_csv
 import matplotlib.pyplot as plt
 import pymysql
-import glob
 import seaborn as sns
 from password import database_password as DBpwd
+from password import database_user as DBuser
+from password import database_host as DBhost
+from password import database as DB
+
 
 analize_licks = False
 
@@ -22,149 +20,12 @@ taglist=[201608466,201608468,201608481,201609114,201609124,201609136,201609336,2
          801010270,801010219,801010044,801010576,801010442,801010205,801010545,801010462,
          801010272,801010278,801010378,801010459,801010534,801010543,801010546]
 
-LICKTIME = 0
-DELTA_TIME = 0
-TRIAL_START = 0
-TAG = "zero"
 
-#??????????????????????????functions for lick interpretation????????????????????????????????????????????????????????????????
-def generate_save_commands(table):
-    if table == "licks":
-        query = """INSERT INTO `licks`
-                (`Mouse`,`Timestamp`,`Related_trial`,`Delta_time`)
-                VALUES(%s,FROM_UNIXTIME(%s),FROM_UNIXTIME(%s),%s)"""
-        values = (TAG,LICKTIME,TRIAL_START, DELTA_TIME)
-    else:
-        print("Error in table selection")
-    return query, values
-def saveToDatabase(table):
-    query, values = generate_save_commands(table)
-    db1 = pymysql.connect(host="localhost",user="root",db="murphylab",password=DBpwd)
-    cur1 = db1.cursor()
-    try:
-        cur1.execute(query, values)
-        db1.commit()
-    except pymysql.Error as e:
-        try:
-            print( "MySQL Error [%d]: %s" % (e.args[0], e.args[1]))
-            return None
-        except IndexError:
-            print( "MySQL Error: %s" % str(e))
-            return None
-    except TypeError as e:
-        print("MySQL Error: TypeError: %s" % str(e))
-        return None
-    except ValueError as e:
-        print("MySQL Error: ValueError: %s" % str(e))
-        return None
-    db1.close()
-def clean_table(df):
-    for idx, row in df.iterrows():
-        if df.loc[idx, 'Event'] == "SeshStart" or df.loc[idx, 'Event'] == "SeshEnd":
-            df.loc[idx, 'Tag'] = "NULL"
-        if df.loc[idx, 'Tag'] == 0:
-            df.loc[idx, 'Tag'] = df.loc[idx - 1, 'Tag']
-        if df.loc[idx, 'Date'] == "reward":
-            df.loc[idx,['Tag', 'Unix', 'Event', 'Date']] = df.loc[idx,['Tag', 'Event','Date', 'Unix']].values
-    df = df[df.Tag != "NULL"]  # kick all rows with Tag: NULL
-    df = df.sort_values(by=['Unix'])
-    df = df.drop(labels="Date", axis=1)
-    return df
-def standardize_trial_event_string(event_string):
-    #done because of older textfiles which have another syntax
-    if event_string[54:57] == "GO=":                                          #up to date syntax
-        event = event_string
-    if event_string[:4] == "Buzz":                                            #lickwithhold statement is missing mostly problem of early cage 1 and 5
-        event = "lickWitholdTime=1.00,"                                       #manually adding this statement and an artificial time!
-
-
-    if len(event_string) == 53:
-        event = event_string + ",GO=0"                                        #this issue occured in cage 5 when licking wasn't required, yet.
-    elif len(event) == 21:
-        event = event + "Buzz:N=2,length=0.10,period=0.20,GO=0"               #this issue occured at the very beginning of cage 1 when stimulus was implemented
-    elif len(event+event_string) == 53:
-        event = event + event_string + ",GO=0"                                #this issue occured in cage 1 when licking wasn't required, yet.
-    return event
-def interprete_licks(files):
-    global DELTA_TIME
-    global TRIAL_START
-    global LICKTIME
-    global TAG
-    trial_in_session_counter = 0
-    analize_licks = False
-
-    for f in files:
-        print(f)
-
-        df = pd.read_csv(f, sep="\t", header=None, names=["Tag", "Unix", "Event", "Date"])
-        df = clean_table(df)
-        df.to_csv("temp.csv", sep="\t", header=None)
-        df1 = pd.read_csv("temp.csv", sep="\t", header=None, names=["Tag", "Unix", "Event"])
-        array = df1.values.tolist()
-
-        for i in range(len(array)):
-            # read in a line of textfile
-            TAG = array[i][0]
-            unix = array[i][1]
-            event = array[i][2]
-            if TAG not in taglist:
-                continue  # get rid of nonsense tags
-            if unix < 1008915797:
-                continue  # get rid of currupted timestamps
-            else:
-                if "Buzz" in event:
-                    event = standardize_trial_event_string(event)
-                if event == "check+" or event == "check No Fix Trial":
-                    analize_licks = True
-                    lick_timestamp_array = []
-                    trial_in_session_counter = 0
-                    current_trial_start = 0
-                if "lick:" in event and analize_licks == True:
-                    lick_timestamp_array.append(unix)
-                if "lickWith" in event and analize_licks == True:
-                    trial_in_session_counter += 1
-                    previous_trial_start = current_trial_start  # shift from previous trial
-                    current_trial_start = unix
-                    if len(lick_timestamp_array) == 0:
-                        LICKTIME = unix
-                        DELTA_TIME = 99.99
-                        TRIAL_START = current_trial_start
-                        saveToDatabase("licks")
-                        if trial_in_session_counter > 1:
-                            TRIAL_START = previous_trial_start
-                            saveToDatabase("licks")
-                    else:
-                        for k in range(len(lick_timestamp_array)):
-                            LICKTIME = lick_timestamp_array[k]
-                            DELTA_TIME = LICKTIME - current_trial_start
-                            TRIAL_START = current_trial_start
-                            saveToDatabase("licks")
-                            if trial_in_session_counter > 1:
-                                DELTA_TIME = LICKTIME - previous_trial_start
-                                TRIAL_START = previous_trial_start
-                                saveToDatabase("licks")
-                    lick_timestamp_array = []
-                if event == "exit" and analize_licks == True:
-                    if len(lick_timestamp_array) == 0:
-                        LICKTIME = unix
-                        DELTA_TIME = 99.99
-                        if trial_in_session_counter > 1:
-                            TRIAL_START = previous_trial_start
-                            saveToDatabase("licks")
-                    else:
-                        for k in range(len(lick_timestamp_array)):
-                            LICKTIME = lick_timestamp_array[k - 1]
-                            DELTA_TIME = LICKTIME - current_trial_start
-                            if trial_in_session_counter > 1:
-                                TRIAL_START = current_trial_start
-                                saveToDatabase("licks")
-                    analize_licks = False
-
-    print("done")
 #????????????????????????????????get data from database and preprocessing functions???????????????????????????????????????????????????
 
+# get data from database. usually no adjustments required
 def getFromDatabase(query):
-    db2 = pymysql.connect(host="localhost", user="root", db="murphylab", password=DBpwd)
+    db2 = pymysql.connect(host=DBhost, user=DBuser, db=DB, password=DBpwd)
     cur2 = db2.cursor()
     try:
         cur2.execute(query) #, (GO,MOUSE)
@@ -264,7 +125,7 @@ SUM(IF(`Licks_within_lickwithhold_time` = "yes" AND `Notes`="GO=-4",1,0)) / SUM(
 FROM `headfix_trials_summary` where 1"""
     return query
 def myround(x, base=5):
-    return (max(0.35,(int(base * math.floor(float(x*100)/base)))/100))
+    return int(base * math.floor(float(x*100)/base))/100
 
 def drop_some_parameters(df):
     #unfortunately the parameters are not saved, so we use the maximum and minimum values of a few variables to estimate them
@@ -295,6 +156,7 @@ def draw_parameters():
     df["Day"] = (df["Date"] - pd.to_datetime("2018-08-08")).dt.days
     df1 = pd.melt(df,id_vars=["Day","Outcome"], value_vars=["Lickwithhold_min", "Lickwithhold_max", "lickdelay_min", "lickdelay_max"])
     #sns.lineplot(data=df1, x="Day",y="value", hue="variable",size="Outcome")    #all parameters, most of them uninteresting
+    #plt.show()  #shows all variables
     df1 = drop_some_parameters(df1)
     #sns.lineplot(data=df1, x="Day", y="value", hue="variable", size="Outcome")
     fig = plt.figure(figsize=(4.4, 2.2))
@@ -345,31 +207,20 @@ def draw_single_session():
     plt.yticks([])
     plt.savefig("fullsession.svg",bbox_inches=0, transparent=True)
     plt.show()
-def draw_singleplot(df,go):
-    sns.set_style("white")
-    sns.set_context("talk")
-    q = sns.distplot(df["Delta_time"], bins=100, kde=True, hist=True, norm_hist=False, kde_kws={"label": "licks"}) \
-        .set(ylabel="Probability density", xlabel="relative time to stimulus [s]",
-             title="Pooled lick distribution over time \n"
-                   "%s" % go)  # ,"clip":(-3,3)
-    sns.despine()
-    plt.xlim(-4, 4)
-    plt.ylim(0, 0.4)
-    plt.tight_layout()
-    plt.show()
 
 def draw_facetgrid(purpose,purpose2):
     # get lick data
+    rownames = {"range1":"Day 1-4","range2":"Day 14-17","range3":"Day 46-49","range4":"Day 55-58"}
     data = list(getFromDatabase(query = generateQuery(purpose)))
     df = pd.DataFrame(data=data,columns=["Mouse", "Timestamp", "Delta_time", "Outcome", "Cage","Task"])
-    df["Training"]= "Day 1-4"
-    df.loc[df["Timestamp"] > "2018-08-12 00:00:00.01", "Training"] = "Day 14-17"
-    df.loc[df["Timestamp"] > "2018-08-30 00:00:00.01", "Training"] = "Day 46-49"
-    df.loc[df["Timestamp"] > "2018-09-26 00:00:00.01", "Training"] = "Day 55-58"
+    df["Training"]= "range1"
+    df.loc[df["Timestamp"] > "2018-08-12 00:00:00.01", "Training"] = "range2"
+    df.loc[df["Timestamp"] > "2018-08-30 00:00:00.01", "Training"] = "range3"
+    df.loc[df["Timestamp"] > "2018-09-26 00:00:00.01", "Training"] = "range4"
 
     #get number of involved trials
     data1 = list(getFromDatabase(query=generateQuery(purpose2)))
-    df1 = pd.DataFrame(data=data1, columns=["Task","Outcome","Day 1-4","Day 14-17","Day 46-49","Day 55-58"])
+    df1 = pd.DataFrame(data=data1, columns=["Task","Outcome","range1","range2","range3","range4"])
     print(df1)
     #bin data
     bins = np.linspace(-3,5,81,endpoint=True)
@@ -381,10 +232,10 @@ def draw_facetgrid(purpose,purpose2):
 
     # rescale data by number of involved trials due to Outcome
     for outcome in ["GO=2", "GO=1", "GO=-4", "GO=-2", "GO=-1","GO=-3"]:
-        for days in ["Day 1-4","Day 14-17","Day 46-49","Day 55-58"]:
+        for days in ["range1","range2","range3","range4"]:
             t.loc[(t["Training"] == days) & (t["Outcome"] == outcome), "Licks"] /= int(
                 df1.loc[(df1["Outcome"] == outcome), days])
-
+    t.replace({"Training": rownames}, inplace=True)
     sns.set_context("paper",font_scale=1.75)
     gr = sns.catplot("Delta_time", y="Licks", alpha=0.6, col="Task", row="Training", hue="Outcome", legend_out=True,
                      margin_titles=True, aspect=3.5, height=2.2,sharey=True,sharex=True,col_order=["GO in time window","NO GO"],
@@ -394,7 +245,7 @@ def draw_facetgrid(purpose,purpose2):
     gr.set_xticklabels(labels=range(-3, 6, 1))
     gr.set_axis_labels("", "")
     [plt.setp(ax.texts, text="") for ax in gr.axes.flat]  # remove the original texts, important!
-    gr.set_titles(row_template='{row_name}', col_template='{col_name}')
+    gr.set_titles(row_template = '{row_name}', col_template='{col_name}')
     sns.despine()
     plt.subplots_adjust(hspace=0.2,wspace=0.1)
     plt.savefig("development.svg",  transparent=True)
@@ -424,9 +275,7 @@ def draw_outcome_patterns():
     # plt.ylim(0, 600)
     plt.tight_layout()
     plt.show()
-#/////////////////////////////////////interprete licks///////////////////////////////////
-#allfiles = glob.glob('D:/Cagedata/textfiles/Group[1-5]_textFiles/*.txt')
-#interprete_licks(allfiles)
+
 
 #//////////////////////////////////////////////////////////////////////////////////////
 

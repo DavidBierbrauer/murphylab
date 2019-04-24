@@ -75,7 +75,6 @@ def generateQuery(table):
                 OR (Date(`headfix_trials_summary`.`Trial start`) BETWEEN "2018-11-23" AND "2018-12-20"))
                 AND `mice_autoheadfix`.`Activity` = "good" and `headfix_trials_summary`.`Fixation` = "fix"
                 AND `headfix_trials_summary`.`Task` LIKE "%window"
-                GROUP BY `Day`,`Mouse`
                 GROUP BY `Mouse`,`Day`"""
     return query
 
@@ -101,21 +100,8 @@ def getFromDatabase(query):
     db2.close()
     return rows
 
-def clean_table(df):
 
-    for idx, row in df.iterrows():
-        if df.loc[idx, 'Event'] == "SeshStart" or df.loc[idx, 'Event'] == "SeshEnd":
-            df.loc[idx, 'Tag'] = "NULL"
-        if df.loc[idx, 'Tag'] == 0:
-            df.loc[idx, 'Tag'] = df.loc[idx - 1, 'Tag']
-        if df.loc[idx, 'Date'] == "reward":
-            df.loc[idx,['Tag', 'Unix', 'Event', 'Date']] = df.loc[idx,['Tag', 'Event','Date', 'Unix']].values
-    df = df[df.Tag != "NULL"]  # kick all rows with Tag: NULL
-    df = df.sort_values(by=['Unix'])
-    df = df.drop(labels="Date", axis=1)
-    return df
-
-stats = "entries"
+stats = "headfixes"
 
 
 data = list(getFromDatabase(query = generateQuery(stats)))
@@ -129,3 +115,11 @@ elif stats == "entries":
                       columns=["Group","Mouse", "Days in cage", "Minutes in chamber/Day","STD Minutes in chamber/Day", "Entries/Day","STD Entries/Day"])
 print(df)
 df.to_csv("summarystatsloose{}.csv".format(stats))
+
+"""SELECT SUM(`nogo`)FROM(SELECT DATE(`Trial start`) AS `Day`,`Mouse`,`Project_ID`,
+SUM(IF(`Notes`="GO=1",1,0))/SUM(IF(`Notes`="GO=1" OR `Notes`="GO=-1" OR `Notes`="GO=-3",1,0)) as `ratenogo`,
+SUM(IF(`Notes`="GO=1" OR `Notes`="GO=-1" OR `Notes`="GO=-3",1,0)) as `nogo`,
+SUM(IF(`Notes`="GO=-2",1,0))/SUM(IF(`Notes`="GO=2" OR `Notes`="GO=-2" OR `Notes`="GO=-4",1,0)) as `ratenotgo`,
+SUM(IF(`Notes`="GO=2" OR `Notes`="GO=-2" OR `Notes`="GO=-4",1,0)) as `notgo`
+FROM `headfix_trials_summary` WHERE `Fixation`="fix" GROUP BY `Mouse`,`Project_ID`,`Day`
+HAVING (`ratenogo`+`ratenotgo`) <=1.00)t"""

@@ -1,14 +1,6 @@
-import sys
-import atexit
-import platform
-import time
 import pandas as pd
-import numpy as np
-from pandas import DataFrame, read_csv
-import matplotlib.pyplot as plt
 import pymysql
 from password import database_password as DBpwd
-import glob
 
 filteredtaglist = ["201608466", "201608468", "201608481", "201609136", "201609336", "210608298", "2016080026",
                    "2016090793", "2016090943",

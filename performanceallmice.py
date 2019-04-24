@@ -1,40 +1,26 @@
-import sys
-import atexit
-import platform
-import time
 import pandas as pd
 import numpy as np
 from sklearn                        import metrics, svm
 from sklearn.linear_model           import LinearRegression
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
-from statsmodels.tsa.stattools import kpss
 from statsmodels.stats.anova import AnovaRM
 import researchpy as rp
 from numpy import log
 from scipy.stats import norm
 from password import database_password as DBpwd
-from math import exp, sqrt
+from password import database_user as DBuser
+from password import database_host as DBhost
+from password import database as DB
 
-
-import math
-from sklearn import preprocessing
-from sklearn import utils
-from pandas import DataFrame, read_csv
+from scipy import stats
 import matplotlib.pyplot as plt
 import pymysql
 import seaborn as sns
-from scipy import stats
-import six
-import glob
 
-
-from pybloqs import Block
-import pybloqs.block.table_formatters as tf
-from IPython.core.display import display, HTML
-
+##  standard get from database connection  ##
 def getFromDatabase(query):
-    db2 = pymysql.connect(host="localhost", user="root", db="murphylab", password=DBpwd)
+    db2 = pymysql.connect(host=DBhost, user=DBuser, db=DB, password=DBpwd)
     cur2 = db2.cursor()
     try:
         cur2.execute(query)
@@ -54,6 +40,11 @@ def getFromDatabase(query):
         return None
     db2.close()
     return rows
+
+##  queries to run the program. Queries are a little outdated and might be done more elegant. Biggest issue is the problem,
+#  that in order to build ratios of the outcomes of trials the data is needed as grouped by outcome and not grouped by outcome to get the whole sum
+#  this is actually not an easy task in SQL, there are two ways: use the SUM(IF(...)) statement or use a group by statement and join the same table
+#  twice, once with group by and once without group by (outcome). here the latter is done and the query looks very long
 def generateQuery(detailed):
     if detailed == "Yes":
         query = """SELECT t.`ts1`,t.`Mouse`,t. `Fixation`, t.`Task`,t.`Outcome`,
@@ -69,6 +60,7 @@ def generateQuery(detailed):
                     (Date(`Trial start`) BETWEEN "2018-11-23" AND "2018-12-20"))
                       AND `Trial in session` < 10
                     group by `ts1`, `Mouse`,`Notes`, `Fixation`) t
+                    
                     INNER JOIN (SELECT `ts1`,`Mouse`, `Fixation`,`Task`,Sum(`Trials`) as `Sumtrials` FROM
                     (select
                     Date(`Trial start`) as `ts1`,`Mouse`,count(*) as `Trials`,`Task`,`Fixation`,`Outcome`
@@ -154,25 +146,38 @@ def generateQuery(detailed):
                     ORDER by `ts1`,`Mouse`, `Fixation`,`Task`,`Notes`)u
                     WHERE u.`Fixation` = "fix" AND u.`Notes` = "GO=2"
                     GROUP BY u.`Mouse`, u.`Fixation`,u.`Notes`"""
-    elif detailed == "dPrime":
-        query = """SELECT DATEDIFF(Date(`Trial start`),Date("2018-08-08")) AS `Day`,`Mouse`,
-                    SUM(IF(`Notes` = "GO=-4" OR `Notes` = "GO=2" ,1,NULL)) AS `HIT`, SUM(IF(`Notes` = "GO=-2",1,NULL)) AS `MISS`,
-                    SUM(IF(`Notes` = "GO=-1" OR `Notes` = "GO=-3" ,1,NULL)) AS `FA`, SUM(IF(`Notes` = "GO=1" ,1,NULL)) AS `CR`
-                    FROM `headfix_trials_summary`
-                    WHERE `Project_ID` = 4 AND Date(`Trial start`) >= "2018-08-21" AND `Fixation` = "fix"
-                    GROUP BY `Day`,`Mouse`"""
-    elif detailed == "day_night_performance":   #see if performance is different during night and day
-        query = """SELECT s.`Day Performance`/s.`night performance`,s.`Mouse` FROM (SELECT t.`Mouse`, AVG(IF(t.`time` >= 7 and t.`time` <= 18,t.`ratio`,NULL)) AS `Day Performance`, AVG(IF(t.`time` < 7 OR t.`time` > 18,t.`ratio`,NULL)) AS `night performance` FROM (SELECT HOUR(`Trial start`) as `time`, `Mouse`, SUM(IF(`Notes`="GO=2",1,0))/count(*) AS `ratio` FROM `headfix_trials_summary` WHERE ((Date(`Trial start`) BETWEEN "2017-08-28" and "2017-10-12") OR 
+
+    elif detailed == "day_night_performance_summary":   #see if performance is different during night and day
+        query = """SELECT s.`Day Performance`/s.`night performance` as `day night ratio`,s.`Mouse` FROM (SELECT t.`Mouse`,
+         AVG(IF(t.`time` >= 7 and t.`time` <= 18,t.`ratio`,NULL)) AS `Day Performance`,
+          AVG(IF(t.`time` < 7 OR t.`time` > 18,t.`ratio`,NULL)) AS `night performance`
+           FROM (SELECT HOUR(`Trial start`) as `time`, `Mouse`, SUM(IF(`Notes`="GO=2",1,0))/count(*) AS `ratio` FROM `headfix_trials_summary`
+            WHERE ((Date(`Trial start`) BETWEEN "2017-08-28" and "2017-10-12") OR 
                     (Date(`Trial start`) BETWEEN "2018-02-20" and "2018-04-09") OR 
                     (Date(`Trial start`) BETWEEN "2018-04-28" and "2018-06-01") OR 
                     (Date(`Trial start`) BETWEEN "2018-08-08" and "2018-10-23") OR 
                     (Date(`Trial start`) BETWEEN "2018-11-23" AND "2018-12-20")) AND `Fixation` = "fix" AND `Task` LIKE "%window"
                     GROUP BY `Mouse`, `time`)t
                     GROUP BY t.`Mouse`)s
-                    GROUP BY s.`Mouse`"""
+                    GROUP BY s.`Mouse` HAVING `day night ratio` IS NOT NULL"""
+    elif detailed == "day_night_performance_timewise":  # see if performance is different during night and day
+        query = """SELECT DAY(`Trial start`) as `day`, `Mouse`,
+SUM(IF(`Notes`="GO=2" AND (HOUR(`Trial start`) >= 7 and HOUR(`Trial start`) <= 18),1,0))/SUM(IF(HOUR(`Trial start`) >= 7 and HOUR(`Trial start`) <= 18,1,0)) AS `day ratio`,
+SUM(IF(`Notes`="GO=2" AND (HOUR(`Trial start`) < 7 OR HOUR(`Trial start`) > 18),1,0))/SUM(IF(HOUR(`Trial start`) < 7 OR HOUR(`Trial start`) > 18,1,0))
+AS `night ratio`
+FROM `headfix_trials_summary`
+            WHERE ((Date(`Trial start`) BETWEEN "2017-08-28" and "2017-10-12") OR 
+                    (Date(`Trial start`) BETWEEN "2018-02-20" and "2018-04-09") OR 
+                    (Date(`Trial start`) BETWEEN "2018-04-28" and "2018-06-01") OR 
+                    (Date(`Trial start`) BETWEEN "2018-08-08" and "2018-10-23") OR 
+                    (Date(`Trial start`) BETWEEN "2018-11-23" AND "2018-12-20")) AND `Fixation` = "fix" AND `Task` LIKE "%window"
+                    GROUP BY `Mouse`, `day`"""
     else:
         print("wrong command ")
     return query
+
+# save the tables that are generated of all the trial data. Once we build the mean of the performance for each day and fixation
+# the other we count the number of trials with distinct outcome
 def save_table(table,dataframe):
     if table == "together":
         df3 = dataframe.groupby(["Day", "Fixation"])["% Performance"].mean()
@@ -182,6 +187,8 @@ def save_table(table,dataframe):
         df3 = dataframe.groupby(["Day", "Fixation"])["Mouse"].count()
         df3 = pd.DataFrame(df3)
         df3.to_html("dayscounts.html", col_space=80)
+
+#  this function prepares the dtaframe
 def prepare_dataframes(df,detailed,list):
     if detailed == "No":
         df.replace({"Outcome": {"GO=2": "GO", "GO=-2": "fail: no licks", "GO=-4": "fail: licked before stimulus ended",
@@ -191,7 +198,7 @@ def prepare_dataframes(df,detailed,list):
         df.replace({"Outcome": {"correct": "GO", "correct: is active": "NO GO"}}, inplace=True)
     df.replace({"Cage": {1: "2017-08-28", 2: "2018-02-20", 3: "2018-04-28", 4: "2018-08-08", 5: "2018-11-23"}}, inplace=True)
 
-    df["% Performance"] = df["% Performance"].convert_objects(convert_numeric=True)
+    df["% Performance"] = pd.to_numeric(df["% Performance"])
     df['Date'] = pd.to_datetime(df['Date'])
     #df['Cage'] = pd.to_datetime(df['Cage'])
     df["Day"] = (df["Date"] - pd.to_datetime(df['Cage'])).dt.days
@@ -205,6 +212,7 @@ def prepare_dataframes(df,detailed,list):
     df2 = df2[df2.Day <= 60]
     return df1,df2
 
+#
 def linear_fit(X,y):
     X = sm.add_constant(X, prepend=False)
     model = sm.OLS(y, X)
@@ -212,7 +220,9 @@ def linear_fit(X,y):
     print(result.summary())
     return result
 
+##  2way anova to compare performance of fix and no fix trials, binning is done in 5 day intervals. Figure 5C  ##
 def TWOway_anovaRM(df):
+    # using the mice that have fix and no fix trials over 30 days
     doublefilteredtaglist = ["2016090793", "2016090943",
                              "2016090629", "2016090797", "2016090965",
                              "201608252", "201608423",
@@ -221,14 +231,16 @@ def TWOway_anovaRM(df):
     df1 = df1[df1.Day <= 30]
     binnings = [-1,4,9,14,19,24,30]
     binlabels = [5,10,15,20,25,30]
-
+    # pandas cut method to do the binning and group by method to build the mean. index needs to be reseted afterwards to avoid multi layer index
     df_groupby_fixation_binned = df1.groupby([pd.cut(df1["Day"],bins=binnings,labels=binlabels ), "Mouse", "Fixation"])["% Performance"].mean().reset_index()
     df_groupby_fixation_binned.to_html("binned.html", bold_rows=False, col_space=80)
+    # anova can be done using statsmodels library
     anova = AnovaRM(data = df_groupby_fixation_binned,depvar="% Performance",subject="Mouse", within=["Day","Fixation"])
     result = anova.fit()
+    # result of the ANOVA
     print(result.summary)
-    #text = result.
     print(result)
+    # plot the anova. set seaborn settings, make a pointplot, customize the legend
     fig = plt.figure(figsize=(7, 5))
     sns.set(style="ticks",font_scale=2,context="paper")
     anovaplot = sns.pointplot(x= "Day", y= "% Performance", hue= "Fixation", capsize=.2, palette="YlGnBu_d", height=6, aspect=.95,
@@ -239,7 +251,7 @@ def TWOway_anovaRM(df):
     plt.ylim(0, 80)
     plt.tight_layout()
     sns.despine()
-    plt.setp(anovaplot.collections, sizes=[120])
+    plt.setp(anovaplot.collections, sizes=[120])      # just the dotsize
     plt.xlabel("")
     plt.ylabel("")
     plt.savefig("anova.svg", bbox_inches=0, transparent=True)
@@ -247,10 +259,65 @@ def TWOway_anovaRM(df):
     return result
 
 
+def t_test_day_night_performance():
+    query ="""SELECT s.`Day Performance`/s.`night performance` as `day night ratio`,s.`Mouse` FROM (SELECT t.`Mouse`,
+         AVG(IF(t.`time` >= 7 and t.`time` <= 18,t.`ratio`,NULL)) AS `Day Performance`,
+          AVG(IF(t.`time` < 7 OR t.`time` > 18,t.`ratio`,NULL)) AS `night performance`
+           FROM (SELECT HOUR(`Trial start`) as `time`, `Mouse`, SUM(IF(`Notes`="GO=2",1,0))/count(*) AS `ratio` FROM `headfix_trials_summary`
+            WHERE ((Date(`Trial start`) BETWEEN "2017-08-28" and "2017-10-12") OR 
+                    (Date(`Trial start`) BETWEEN "2018-02-20" and "2018-04-09") OR 
+                    (Date(`Trial start`) BETWEEN "2018-04-28" and "2018-06-01") OR 
+                    (Date(`Trial start`) BETWEEN "2018-08-08" and "2018-10-23") OR 
+                    (Date(`Trial start`) BETWEEN "2018-11-23" AND "2018-12-20")) AND `Fixation` = "fix" AND `Task` LIKE "%window"
+                    GROUP BY `Mouse`, `time`)t
+                    GROUP BY t.`Mouse`)s
+                    GROUP BY s.`Mouse` HAVING `day night ratio` IS NOT NULL"""
+    query1 = """SELECT t.`day ratio`/t.`night ratio` AS `day_night_ratio`,t.`Mouse`,t.`day` FROM (SELECT DATE(`Trial start`) as `day`, `Mouse`,
+SUM(IF(`Notes`="GO=2" AND (HOUR(`Trial start`) >= 7 and HOUR(`Trial start`) <= 18),1,0))/SUM(IF(HOUR(`Trial start`) >= 7 and HOUR(`Trial start`) <= 18,1,0)) AS `day ratio`,
+SUM(IF(`Notes`="GO=2" AND (HOUR(`Trial start`) < 7 OR HOUR(`Trial start`) > 18),1,0))/SUM(IF(HOUR(`Trial start`) < 7 OR HOUR(`Trial start`) > 18,1,0))
+AS `night ratio`
+FROM `headfix_trials_summary`
+            WHERE ((Date(`Trial start`) BETWEEN "2017-08-28" and "2017-10-12") OR 
+                    (Date(`Trial start`) BETWEEN "2018-02-20" and "2018-04-09") OR 
+                    (Date(`Trial start`) BETWEEN "2018-04-28" and "2018-06-01") OR 
+                    (Date(`Trial start`) BETWEEN "2018-08-08" and "2018-10-23") OR 
+                    (Date(`Trial start`) BETWEEN "2018-11-23" AND "2018-12-20")) AND `Fixation` = "fix" AND `Task` LIKE "%window"
+                    GROUP BY `Mouse`, `day`)t 
+                    HAVING `day_night_ratio` IS NOT NULL"""
+    query2 = """SELECT (t.`day ratio`-t.`night ratio`)/(t.`night ratio`+t.`day ratio`) AS `day_night_ratio`,t.`Mouse`,t.`day` FROM (SELECT DATE(`Trial start`) as `day`, `Mouse`,
+SUM(IF(`Notes`="GO=2" AND (HOUR(`Trial start`) >= 7 and HOUR(`Trial start`) <= 18),1,0))/SUM(IF(HOUR(`Trial start`) >= 7 and HOUR(`Trial start`) <= 18,1,0)) AS `day ratio`,
+SUM(IF(`Notes`="GO=2" AND (HOUR(`Trial start`) < 7 OR HOUR(`Trial start`) > 18),1,0))/SUM(IF(HOUR(`Trial start`) < 7 OR HOUR(`Trial start`) > 18,1,0))
+AS `night ratio`
+FROM `headfix_trials_summary`
+            WHERE ((Date(`Trial start`) BETWEEN "2017-08-28" and "2017-10-12") OR 
+                    (Date(`Trial start`) BETWEEN "2018-02-20" and "2018-04-09") OR 
+                    (Date(`Trial start`) BETWEEN "2018-04-28" and "2018-06-01") OR 
+                    (Date(`Trial start`) BETWEEN "2018-08-08" and "2018-10-23") OR 
+                    (Date(`Trial start`) BETWEEN "2018-11-23" AND "2018-12-20")) AND `Fixation` = "fix" AND `Task` LIKE "%window"
+                    GROUP BY `Mouse`, `day`)t
+                    HAVING `day_night_ratio` IS NOT NULL"""
+    data = list(getFromDatabase(query=query))
+    df_daynightratio = pd.DataFrame(data=data, columns=["day night ratio", "mouse"])
+    daynightratio = list(pd.to_numeric(df_daynightratio["day night ratio"]))
+    result = stats.ttest_1samp(daynightratio, 1.0)
+    print(result)
 
+    data = list(getFromDatabase(query=query1)) #query1 needs target of 1.0
+    df_daynightratio = pd.DataFrame(data=data, columns=["day night ratio","mouse","day"])
+    a=[]
+    for mouse in filteredtaglist:
+        daynightratio = list(pd.to_numeric(df_daynightratio.loc[(df_daynightratio["mouse"] == mouse), "day night ratio"]))
+        result = stats.ttest_1samp(daynightratio,1.0)
+        a.append(result[1])
+        print(mouse,result[1])
+    import statistics
 
-Z = norm.ppf
+    print(statistics.stdev(a))
+    #a= [1.1,1.1,0.9,1.0,1.0,1.0,1.0,0.9,0.9,1.1]
+    #result1 = stats.ttest_1samp(a, 1.0)
+    #print(result1)
 def dPrime(hits, misses, fas, crs):
+    Z = norm.ppf
     # Floors an ceilings are replaced by half hits and half FA's
     halfHit = 0.5/(hits + misses)
     halfFa = 0.5/(fas + crs)
@@ -275,7 +342,13 @@ def dPrime(hits, misses, fas, crs):
     return out
 
 def dPrime_dataframe():
-    data = list(getFromDatabase(generateQuery("dPrime")))
+    query = """SELECT DATEDIFF(Date(`Trial start`),Date("2018-08-08")) AS `Day`,`Mouse`,
+                SUM(IF(`Notes` = "GO=-4" OR `Notes` = "GO=2" ,1,NULL)) AS `HIT`, SUM(IF(`Notes` = "GO=-2",1,NULL)) AS `MISS`,
+                SUM(IF(`Notes` = "GO=-1" OR `Notes` = "GO=-3" ,1,NULL)) AS `FA`, SUM(IF(`Notes` = "GO=1" ,1,NULL)) AS `CR`
+                FROM `headfix_trials_summary`
+                WHERE `Project_ID` = 4 AND Date(`Trial start`) >= "2018-08-21" AND `Fixation` = "fix"
+                GROUP BY `Day`,`Mouse`"""
+    data = list(getFromDatabase(generateQuery(query)))
     df = pd.DataFrame(data=data,columns=["Day","Mouse","HIT","MISS","FA","CR"])
     df.fillna(value=0, inplace=True)
     dprime=[]
@@ -291,6 +364,7 @@ def dPrime_dataframe():
     sns.despine()
     plt.tight_layout()
     plt.show()
+
 def make_augmented_dickey_fuller_test(y, trend):
     y = y
     z = log(y)
@@ -380,11 +454,11 @@ def draw_doubleplot(df1,df2,hue_value):
 
     a = sns.lineplot(data=df1, y="% Performance", x="Day", hue="Task", style="Fixation", size="Fixation", ax=axes[1])
     handles, labels = a.get_legend_handles_labels()
-    handles = handles[1:3] + handles[4:6]
-    labels = labels[1:3] + labels[4:6]
+    #handles = handles[1:3] + handles[4:6]
+    #labels = labels[1:3] + labels[4:6]
     print(handles, labels)
-    a.legend(handles=handles, labels=labels, frameon=False, loc=9, ncol=4, bbox_to_anchor=(0.5, 1.2),
-             title="Mouse 201608423")
+    a.legend(handles=handles, labels=labels, frameon=False, loc=9, ncol=2, bbox_to_anchor=(0.5, 1.05),
+             title="Trials of mouse 201608423")
     a.set(ylabel="Success rate [%] \n ")
     for ind, label in enumerate(a.get_xticklabels()):
         if ind % 10 == 0:  # every 10th label is kept
@@ -393,7 +467,7 @@ def draw_doubleplot(df1,df2,hue_value):
             label.set_visible(False)
 
     plt.xlim(-1, 60)
-    plt.ylim(0, 100)
+    plt.ylim(0, 140)
     sns.despine()
 
     sns.despine()
@@ -416,7 +490,7 @@ def draw_histogram(df):
     #g = sns.countplot(data=df, x="% Performance", hue="Fixation")
     p = sns.distplot(df.loc[df["Fixation"] == "fix","% Performance"],rug=True, bins=20, norm_hist=True,kde_kws={"label":"fixed","clip":(0.0,100.0)})
     q = sns.distplot(df.loc[df["Fixation"] == "no fix","% Performance"],rug=True, bins=20,kde=True, norm_hist=False,kde_kws={"label":"unfixed","clip":(0.0,100.0)})\
-        .set(ylabel="Probability density", xlabel="Daily success rate [%]",title="Unpooled daily success rate \n"
+        .set(ylabel="Probability density", xlabel="Daily success rate [%]",title="Daily success rate \n"
                                                                                  "distribution of all mice")
     sns.despine()
     plt.tight_layout()
@@ -457,13 +531,17 @@ def draw_jointplot(df):
 
 
 def st_check(timeseries,df):
-    rolmean = df.rolling(window=6).mean()  ## as month is year divide by 12
+    rolmean = df.rolling(window=6).mean()
     rolstd = df.rolling(window=3).std()
 
     # Plot rolling statistics:
     #orig = plt.plot(timeseries, color='blue', label='Original')
-    mean = rolmean.plot(figsize=(8,4))
-    #std = plt.plot(rolstd, color='black', label='Rolling Std')
+    mean = rolmean.plot(figsize=(8,4),label='Rolling mean')
+    std = mean.twinx()
+    plt.plot(rolstd, color='salmon', label='Rolling std')
+    std.set_ylabel("Rolling std success rate")
+    mean.set_ylabel("Rolling mean success rate")
+    mean.set_xlabel("Day")
     plt.legend(loc='best')
     plt.title('Rolling Mean & Standard Deviation')
     plt.show()
@@ -488,7 +566,7 @@ table = "together"
 graph = "split"
 filteredtaglist=["201608466","201608468","201608481","201609136","201609336","210608298","2016080026",
                  "2016090793","2016090943",
-                 "2016090629","2016090797","2016090882","2016090964","2016090965","2016090985","2016091183",
+                 "2016090629","2016090797","2016090882","2016090965","2016090985","2016091183",
                  "201608252","201608423","201608474",
                  "801010270","801010219","801010205"]
 
@@ -497,15 +575,14 @@ taglist=[201608466,201608468,201608481,201609114,201609124,201609136,201609336,2
          2016090629,2016090647,2016090797,2016090882,2016090964,2016090965,2016090985,2016091183,2016090707,
          201608252,201608423,201608474,2016080008,2016080009,2016080104,2016080242,2016080250,
          801010270,801010219,801010044,801010576,801010442,801010205,801010545,801010462]
-cage4taglist= ["201608252","201608423"]
+cage4taglist= ["201608423"]
 outcomelist = ["GO","NO GO"]
 filteredoutcomelist= ["GO"]
 
 
 #//////////////////////////////////// MAIN FUNCTION ////////////////////////////////////////////////////////////////////////////////////////////
 detailed = "No"
-query = generateQuery(detailed)                                               #define query in query function above
-data = list(getFromDatabase(query))                                           #no need to change
+data = list(getFromDatabase(query = generateQuery(detailed)))
 df = make_dataframe(data,detailed)                                            #define dataframe structure in function above. especially column names
 
 df_single_mouse, df_filteredtaglist_go_nogo = prepare_dataframes(df,detailed,filteredoutcomelist)
@@ -522,19 +599,19 @@ y = df_groupby_fixation.iloc[:, 1].values
 
 print(df_groupby_fixation.corr())
 
-dPrime_dataframe()
-TWOway_anovaRM(df_filteredtaglist_go_nogo)
-make_augmented_dickey_fuller_test(y,"c")
-regression = linear_fit(X,y)
-save_table(table,df_filteredtaglist_go_nogo)
+#dPrime_dataframe()
+#TWOway_anovaRM(df_filteredtaglist_go_nogo)
+#make_augmented_dickey_fuller_test(y,"c")
+#regression = linear_fit(X,y)
+#save_table(table,df_filteredtaglist_go_nogo)
 
 #print(st_check(y,df_groupby_fixation.iloc[:, 1]))
 
 #draw_doubleplot(df_single_mouse,df_filteredtaglist_go_nogo,"Fixation")
-draw_singleplot(df_filteredtaglist_go_nogo,"Cage",None)
+#draw_singleplot(df_filteredtaglist_go_nogo,"Cage",None)
 #draw_countplot(df_filteredtaglist_go_nogo)
-draw_histogram(df_filteredtaglist_go_nogo)
-draw_jointplot(df_filteredtaglist_go_nogo)
+#draw_histogram(df_filteredtaglist_go_nogo)
+#draw_jointplot(df_filteredtaglist_go_nogo)
 #plt.gcf().autofmt_xdate()
-
+#t_test_day_night_performance()
 
