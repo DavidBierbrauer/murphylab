@@ -79,7 +79,7 @@ def generateQuery(table):
     return query
 
 def getFromDatabase(query):
-    db2 = pymysql.connect(host="localhost", user="root", db="murphylab", password=DBpwd)
+    db2 = pymysql.connect(host="142.103.107.236", user="guest17", db="AHFpaper", password="onlyforguests")
     cur2 = db2.cursor()
     try:
         cur2.execute(query)
