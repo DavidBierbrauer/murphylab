@@ -4,7 +4,6 @@ seaborn
 pymysql
 pandas
 scipy
-math
 statsmodels
 sklearn
 researchpy
