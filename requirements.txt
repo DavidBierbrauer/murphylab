@@ -3,7 +3,6 @@ matplotlib
 seaborn
 pymysql
 pandas
-glob
 re
 scipy
 math
