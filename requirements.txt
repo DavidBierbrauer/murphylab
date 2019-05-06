@@ -3,7 +3,6 @@ matplotlib
 seaborn
 pymysql
 pandas
-re
 scipy
 math
 statsmodels
