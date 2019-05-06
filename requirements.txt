@@ -1,0 +1,12 @@
+numpy
+matplotlib
+seaborn
+pymysql
+pandas
+glob
+re
+scipy
+math
+statsmodels
+sklearn
+researchpy
